@@ -78,9 +78,7 @@ export class OAuthService extends AuthConfig implements OnDestroy {
   public state? = '';
 
   protected eventsSubject: Subject<OAuthEvent> = new Subject<OAuthEvent>();
-  protected discoveryDocumentLoadedSubject: Subject<
-    OidcDiscoveryDoc
-  > = new Subject<OidcDiscoveryDoc>();
+  protected discoveryDocumentLoadedSubject: Subject<OidcDiscoveryDoc> = new Subject<OidcDiscoveryDoc>();
   protected silentRefreshPostMessageEventListener: EventListener;
   protected grantTypesSupported: Array<string> = [];
   protected _storage: OAuthStorage;
@@ -120,20 +118,8 @@ export class OAuthService extends AuthConfig implements OnDestroy {
     if (config) {
       this.configure(config);
     }
-
-    try {
-      if (storage) {
-        this.setStorage(storage);
-      } else if (typeof sessionStorage !== 'undefined') {
-        this.setStorage(sessionStorage);
-      }
-    } catch (e) {
-      console.error(
-        'No OAuthStorage provided and cannot access default (sessionStorage).' +
-          'Consider providing a custom OAuthStorage implementation in your module.',
-        e
-      );
-    }
+      
+    this.initStorage();
 
     // in IE, sessionStorage does not always survive a redirect
     if (
@@ -149,6 +135,22 @@ export class OAuthService extends AuthConfig implements OnDestroy {
     }
 
     this.setupRefreshTimer();
+  }
+      
+  private initStorage(): void {
+     try {
+      if (storage) {
+        this.setStorage(storage);
+      } else if (typeof sessionStorage !== 'undefined') {
+        this.setStorage(sessionStorage);
+      }
+    } catch (e) {
+      console.error(
+        'No OAuthStorage provided and cannot access default (sessionStorage).' +
+          'Consider providing a custom OAuthStorage implementation in your module.',
+        e
+      );
+    }
   }
 
   /**
