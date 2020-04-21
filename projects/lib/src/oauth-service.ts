@@ -1,6 +1,14 @@
 import { Injectable, NgZone, Optional, OnDestroy, Inject } from '@angular/core';
 import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
-import { Observable, Subject, Subscription, of, race, from } from 'rxjs';
+import {
+  Observable,
+  Subject,
+  Subscription,
+  of,
+  race,
+  from,
+  combineLatest
+} from 'rxjs';
 import {
   filter,
   delay,
@@ -523,6 +531,7 @@ export class OAuthService extends AuthConfig implements OnDestroy {
 
           this.discoveryDocumentLoaded = true;
           this.discoveryDocumentLoadedSubject.next(doc);
+          this.revocationEndpoint = doc.revocation_endpoint;
 
           if (this.sessionChecksEnabled) {
             this.restartSessionChecksIfStillLoggedIn();
@@ -621,6 +630,14 @@ export class OAuthService extends AuthConfig implements OnDestroy {
     if (errors.length > 0) {
       this.logger.error(
         'error validating token_endpoint in discovery document',
+        errors
+      );
+    }
+
+    errors = this.validateUrlFromDiscoveryDocument(doc.revocation_endpoint);
+    if (errors.length > 0) {
+      this.logger.error(
+        'error validating revocation_endpoint in discovery document',
         errors
       );
     }
@@ -804,7 +821,8 @@ export class OAuthService extends AuthConfig implements OnDestroy {
             this.storeAccessTokenResponse(
               tokenResponse.access_token,
               tokenResponse.refresh_token,
-              tokenResponse.expires_in,
+              tokenResponse.expires_in ||
+                this.fallbackAccessTokenExpirationTimeInSec,
               tokenResponse.scope,
               this.extractRecognizedCustomParameters(tokenResponse)
             );
@@ -890,7 +908,8 @@ export class OAuthService extends AuthConfig implements OnDestroy {
             this.storeAccessTokenResponse(
               tokenResponse.access_token,
               tokenResponse.refresh_token,
-              tokenResponse.expires_in,
+              tokenResponse.expires_in ||
+                this.fallbackAccessTokenExpirationTimeInSec,
               tokenResponse.scope,
               this.extractRecognizedCustomParameters(tokenResponse)
             );
@@ -1729,7 +1748,8 @@ export class OAuthService extends AuthConfig implements OnDestroy {
             this.storeAccessTokenResponse(
               tokenResponse.access_token,
               tokenResponse.refresh_token,
-              tokenResponse.expires_in,
+              tokenResponse.expires_in ||
+                this.fallbackAccessTokenExpirationTimeInSec,
               tokenResponse.scope,
               this.extractRecognizedCustomParameters(tokenResponse)
             );
@@ -2537,5 +2557,92 @@ export class OAuthService extends AuthConfig implements OnDestroy {
       }
     });
     return foundParameters;
+  }
+
+  /**
+   * Revokes the auth token to secure the vulnarability
+   * of the token issued allowing the authorization server to clean
+   * up any security credentials associated with the authorization
+   */
+  public revokeTokenAndLogout(): Promise<any> {
+    let revokeEndpoint = this.revocationEndpoint;
+    let accessToken = this.getAccessToken();
+    let refreshToken = this.getRefreshToken();
+
+    if (!accessToken) {
+      return;
+    }
+
+    let params = new HttpParams();
+
+    let headers = new HttpHeaders().set(
+      'Content-Type',
+      'application/x-www-form-urlencoded'
+    );
+
+    if (this.useHttpBasicAuth) {
+      const header = btoa(`${this.clientId}:${this.dummyClientSecret}`);
+      headers = headers.set('Authorization', 'Basic ' + header);
+    }
+
+    if (!this.useHttpBasicAuth) {
+      params = params.set('client_id', this.clientId);
+    }
+
+    if (!this.useHttpBasicAuth && this.dummyClientSecret) {
+      params = params.set('client_secret', this.dummyClientSecret);
+    }
+
+    if (this.customQueryParams) {
+      for (const key of Object.getOwnPropertyNames(this.customQueryParams)) {
+        params = params.set(key, this.customQueryParams[key]);
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      let revokeAccessToken: Observable<void>;
+      let revokeRefreshToken: Observable<void>;
+
+      if (accessToken) {
+        let revokationParams = params
+          .set('token', accessToken)
+          .set('token_type_hint', 'access_token');
+        revokeAccessToken = this.http.post<void>(
+          revokeEndpoint,
+          revokationParams,
+          { headers }
+        );
+      } else {
+        revokeAccessToken = of(null);
+      }
+
+      if (refreshToken) {
+        let revokationParams = params
+          .set('token', refreshToken)
+          .set('token_type_hint', 'refresh_token');
+        revokeRefreshToken = this.http.post<void>(
+          revokeEndpoint,
+          revokationParams,
+          { headers }
+        );
+      } else {
+        revokeRefreshToken = of(null);
+      }
+
+      combineLatest([revokeAccessToken, revokeRefreshToken]).subscribe(
+        res => {
+          this.logOut();
+          resolve(res);
+          this.logger.info('Token successfully revoked');
+        },
+        err => {
+          this.logger.error('Error revoking token', err);
+          this.eventsSubject.next(
+            new OAuthErrorEvent('token_revoke_error', err)
+          );
+          reject(err);
+        }
+      );
+    });
   }
 }
